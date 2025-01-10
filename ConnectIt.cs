@@ -18,13 +18,14 @@ namespace ConnectIt
         public override string ModuleName => "ConnectIt";
         public override string ModuleDescription => "Allows for servers communication with sockets.";
         public override string ModuleAuthor => "NyggaBytes";
-        public override string ModuleVersion => "1.0.6";
+        public override string ModuleVersion => "1.0.8";
 
-        public class serverInstance(String address, int port, String secureToken)
+        public class serverInstance(String address, int port, String secureToken, String name)
         {
             public String Address = address;
             public int Port = port;
             public String SecureToken = secureToken;
+            public String Name = name;
         }
 
         public IPAddress? bindIPAddress { get; set; }
@@ -58,10 +59,13 @@ namespace ConnectIt
                 Task.Run(async () => {
                     await LoadDatabaseCredentialsAsync();
                     await LoadServerIDAsync();
-                    if (serverId > 0) ExecuteAsync($"INSERT INTO `connectit_servers` (`server_id`,`address`,`port`,`secure_token`) VALUES ({serverId},'{MySqlHelper.EscapeString(bindIPAddress.ToString())}',{port},'{MySqlHelper.EscapeString(SecureToken)}') ON DUPLICATE KEY UPDATE `address` = VALUES(`address`),`port` = VALUES(`port`),`secure_token` = VALUES(`secure_token`);");
+                    await GetCurrentServerNameAsync();
+                    if (serverId > 0) ExecuteAsync($"INSERT INTO `connectit_servers` (`server_id`,`address`,`port`,`secure_token`) VALUES ({serverId},'{MySqlHelper.EscapeString(bindIPAddress.ToString())}',{port},'{MySqlHelper.EscapeString(SecureToken)}') ON DUPLICATE KEY UPDATE `address` = VALUES(`address`),`port` = VALUES(`port`),`secure_token` = VALUES(`secure_token`);", true);
                     otherServers = await GetOtherServersAsync();
                     if (otherServers.Count < 1) Logger.LogCritical("No other servers in database, Sockets not needed");
                     else Logger.LogInformation($"Loaded {otherServers.Count} other servers");
+                    if (serverName.Length > 1) Logger.LogInformation($"Loaded server name '{serverName}' from database");
+                    else Logger.LogWarning($"Couldn't load server name from database");
                 }).Wait();
                 listenerTask = Task.Run(async () => {
                     if (otherServers.Count < 1) return;
@@ -135,7 +139,7 @@ namespace ConnectIt
             }
             finally
             {
-                ExecuteAsync($"INSERT INTO `connectit_servers` (`server_id`,`address`,`port`,`secure_token`) VALUES ({serverId},'',0,'') ON DUPLICATE KEY UPDATE `address` = VALUES(`address`),`port` = VALUES(`port`),`secure_token` = VALUES(`secure_token`);");
+                ExecuteAsync($"INSERT INTO `connectit_servers` (`server_id`,`address`,`port`,`secure_token`) VALUES ({serverId},'',0,'') ON DUPLICATE KEY UPDATE `address` = VALUES(`address`),`port` = VALUES(`port`),`secure_token` = VALUES(`secure_token`);", false);
                 listener.Disconnect(false);
                 listener?.Dispose();
                 listenerTask?.Dispose();
@@ -144,20 +148,28 @@ namespace ConnectIt
         }
 
         #region commands
-        [ConsoleCommand("css_sendAll", "Send command to execute by all available servers.")]
-        [CommandHelper(minArgs: 1, usage: "css_sendAll <COMMAND>", whoCanExecute: CommandUsage.SERVER_ONLY)]
+        [ConsoleCommand("css_CIsendAll", "Send command to execute by all available servers.")]
+        [CommandHelper(minArgs: 1, usage: "css_CIsendAll <COMMAND>", whoCanExecute: CommandUsage.SERVER_ONLY)]
         public void OnSendToAllCommand(CCSPlayerController? player, CommandInfo command)
         {
-            String message = command.ArgByIndex(1);
-            sendMessage(message, false, player, command);
+            String message = command.ArgString;
+            sendMessage(message, 0, player, command);
         }
 
-        [ConsoleCommand("css_sendAllId", "Send command to execute by all available servers with server id.")]
-        [CommandHelper(minArgs: 1, usage: "css_sendAllId <COMMAND> ID WILL BE ADDED", whoCanExecute: CommandUsage.SERVER_ONLY)]
+        [ConsoleCommand("css_CIsendAllId", "Send command to execute by all available servers with server id.")]
+        [CommandHelper(minArgs: 1, usage: "css_CIsendAllId <COMMAND> ID WILL BE ADDED", whoCanExecute: CommandUsage.SERVER_ONLY)]
         public void OnSendToAllIdCommand(CCSPlayerController? player, CommandInfo command)
         {
-            String message = command.ArgByIndex(1);
-            sendMessage(message, true, player, command);
+            String message = command.ArgString;
+            sendMessage(message, 1, player, command);
+        }
+
+        [ConsoleCommand("css_CIsendAllName", "Send command to execute by all available servers with server name.")]
+        [CommandHelper(minArgs: 1, usage: "css_CIsendAllId <COMMAND> NAME WILL BE ADDED", whoCanExecute: CommandUsage.SERVER_ONLY)]
+        public void OnSendToAllNameCommand(CCSPlayerController? player, CommandInfo command)
+        {
+            String message = command.ArgString;
+            sendMessage(message, 2, player, command);
         }
 
         [ConsoleCommand("css_connectit", "Connect it plugin management and info.")]
@@ -218,7 +230,7 @@ namespace ConnectIt
             return null;
         }
 
-        public bool sendMessage(string message, bool sendId, CCSPlayerController? player = null, CommandInfo? command = null) {
+        public bool sendMessage(string message, int mode, CCSPlayerController? player = null, CommandInfo? command = null) {
             if (message == null || message.Length < 3)
             {
                 command?.ReplyToCommand("Command in argument not specified.");
@@ -247,7 +259,7 @@ namespace ConnectIt
                         using Socket client = new(ipEndPoint.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
                         await client.ConnectAsync(ipEndPoint);
 
-                        var messageBytes = Encoding.UTF8.GetBytes(server.SecureToken + message + (sendId ? " " + serverId : "") + "<|EOM|>");
+                        var messageBytes = Encoding.UTF8.GetBytes(server.SecureToken + message + (mode == 1 ? " " + serverId : (mode == 2 ? ((serverName.Length > 1) ? serverName : "NULL") : "")) + "<|EOM|>");
                         await client.SendAsync(messageBytes, SocketFlags.None);
                         client.Dispose();
                     }

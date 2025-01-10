@@ -7,6 +7,7 @@ namespace ConnectIt;
 public partial class ConnectIt
 {
     public uint serverId = 0;
+    public String serverName = "";
     public static string DatabaseCredentials { get; set; } = string.Empty;
 
     private class DatabaseConfig
@@ -92,5 +93,15 @@ public partial class ConnectIt
         {
             Logger.LogCritical($"Error loading Server ID: {ex.Message}");
         }
+    }
+
+    private async Task GetCurrentServerNameAsync()
+    {
+        using var connection = await ConnectAsync();
+        using var query = new MySqlCommand($"SELECT `name` FROM `levelranks`.`lvl_web_servers` WHERE `id` = {serverId};", connection);
+        using var result = await query.ExecuteReaderAsync();
+
+        if (await result.ReadAsync()) serverName = result.GetString(0);
+        else serverName = "";
     }
 }
